@@ -4,15 +4,36 @@
 #include <stdlib.h>
 #include "cJSON.h"
 
+#define MAX_PARAMS 10 // í•˜ë‚˜ì˜ í•¨ìˆ˜ê°€ ê°€ì§ˆ ìˆ˜ ìžˆëŠ” ìµœëŒ€ ë§¤ê°œë³€ìˆ˜ ê°œìˆ˜
+#define MAX_FUNCTIONS 100 // ì¶”ì¶œí•  ìˆ˜ ìžˆëŠ” ìµœëŒ€ í•¨ìˆ˜ ê°œìˆ˜
+
+typedef struct {
+	char type[100]; // íŒŒë¼ë¯¸í„° íƒ€ìž…
+	char name[100]; // íŒŒë¼ë¯¸í„° ì´ë¦„
+} ParamInfo;
+
+typedef struct {
+	char name[100]; // í•¨ìˆ˜ ì´ë¦„
+	char returnType[100]; // ë¦¬í„´ íƒ€ìž…
+	ParamInfo params[MAX_PARAMS]; // íŒŒë¼ë¯¸í„° ì •ë³´
+	int paramCount; // íŒŒë¼ë¯¸í„° ê°œìˆ˜
+	int ifCount; // if ì¡°ê±´ì˜ ê°œìˆ˜
+	int bBody; //í•¨ìˆ˜ bodyë¶€ë¶„ êµ¬í˜„ ì—¬ë¶€
+} FunctionInfo;
+
+FunctionInfo functions[MAX_FUNCTIONS]; // í•¨ìˆ˜ ì •ë³´ë¥¼ ì €ìž¥í•  ì „ì—­ ë°°ì—´
+int iFunctionCount = 0; // ì €ìž¥ëœ í•¨ìˆ˜ì˜ ê°œìˆ˜
+
 int iFunctionNum = 0;
 void iterJsonObj(cJSON* json);
 void analyzeJsonObj(cJSON* object);
 void analyzeJsonObj_Function(cJSON* nodeTypeFuncdef);
-void analyzeJsonObj_Function_Param(cJSON* param);
+void analyzeJsonObj_Function_Param(cJSON* param, int k);
 void analyzeJsonObj_Decl(cJSON* nodeTypeDecl);
 int countIfNodetypes(cJSON* item);
+void writeFunctionsToJson(const char* filename);
 
-//JSON ÆÄ½Ì
+//JSON íŒŒì‹±
 cJSON* parseJsonString(const char* jsonString) {
 	cJSON* json = cJSON_Parse(jsonString);
 	if (json == NULL) {
@@ -34,7 +55,7 @@ void iterJsonObj(cJSON* json) {
 	if (cJSON_IsArray(functionAndVariables)) {
 		cJSON_ArrayForEach(object, functionAndVariables) {
 			analyzeJsonObj(object);
-		}//ext ¹è¿­ÀÇ ¸ðµç ¿ø¼Ò ¼øÈ¸
+		}//ext ë°°ì—´ì˜ ëª¨ë“  ì›ì†Œ ìˆœíšŒ
 	}
 	else {
 		cJSON_Delete(functionAndVariables);
@@ -43,7 +64,7 @@ void iterJsonObj(cJSON* json) {
 }
 
 
-//ÇÔ¼ö ¼±¾ð º¯¼ö ¼±¾ð ±¸º°
+//í•¨ìˆ˜ ì„ ì–¸ ë³€ìˆ˜ ì„ ì–¸ êµ¬ë³„
 void analyzeJsonObj(cJSON* object) {
 	if (object != NULL) {
 		cJSON* _nodetype = cJSON_GetObjectItemCaseSensitive(object, "_nodetype");
@@ -59,8 +80,9 @@ void analyzeJsonObj(cJSON* object) {
 	}
 }
 
-//ÇÔ¼ö Ã³¸®
+//í•¨ìˆ˜ ì²˜ë¦¬
 void analyzeJsonObj_Function(cJSON* nodeTypeFuncdef) {
+	functions[iFunctionCount].paramCount = 0;
 	int iIfnum = 0;
 	cJSON* decl = cJSON_GetObjectItemCaseSensitive(nodeTypeFuncdef, "decl");
 	cJSON* body = cJSON_GetObjectItemCaseSensitive(nodeTypeFuncdef, "body");
@@ -68,7 +90,8 @@ void analyzeJsonObj_Function(cJSON* nodeTypeFuncdef) {
 	cJSON* name = cJSON_GetObjectItemCaseSensitive(decl, "name");
 	cJSON* type = cJSON_GetObjectItemCaseSensitive(decl, "type");
 	printf("function name: %s\n", name->valuestring);
-	iFunctionNum++;
+	strcpy(functions[iFunctionCount].name, name->valuestring);
+	functions[iFunctionCount].bBody = 1;
 
 	if (cJSON_IsObject(type)) {
 		cJSON* typeOfType = cJSON_GetObjectItemCaseSensitive(type, "type");
@@ -76,39 +99,42 @@ void analyzeJsonObj_Function(cJSON* nodeTypeFuncdef) {
 		cJSON* typeOfTypeOfType = cJSON_GetObjectItemCaseSensitive(typeOfType, "type");
 		cJSON* identifier = cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(typeOfTypeOfType, "names"), 0);
 
-		//¹ÝÈ¯Å¸ÀÔ
+		//ë°˜í™˜íƒ€ìž…
 		if (identifier == NULL) {
 			printf("return type: void\n");
+			strcpy(functions[iFunctionCount].returnType, "void");
 		}
 		else {
 			printf("return type: %s\n", identifier->valuestring);
+			strcpy(functions[iFunctionCount].returnType, identifier->valuestring);
 		}
 
-		//¸Å°³º¯¼ö
+		//ë§¤ê°œë³€ìˆ˜
 		cJSON* args = cJSON_GetObjectItemCaseSensitive(type, "args");
 		cJSON* params = cJSON_GetObjectItemCaseSensitive(args, "params");
 		cJSON* param;
 		if (params != NULL) {
 			int i = cJSON_GetArraySize(params);
 			for (int k = 0; k < i; k++) {
-				analyzeJsonObj_Function_Param(cJSON_GetArrayItem(params, k));
+				analyzeJsonObj_Function_Param(cJSON_GetArrayItem(params, k),k);
 			}
 		}
 		else {
 			printf("param: none\n");
 		}
 	}
-	//if °³¼ö
+	//if ê°œìˆ˜
 	if (cJSON_IsObject(body)) {
 		iIfnum = countIfNodetypes(body);
-		
+		functions[iFunctionCount].ifCount = iIfnum;
 	}
-	printf("if °³¼ö: %d", iIfnum);
+	printf("if ê°œìˆ˜: %d", iIfnum);
 	printf("\n");
+	iFunctionCount++;
 }
 
-//¸Å°³º¯¼ö ÃßÀû
-void analyzeJsonObj_Function_Param(cJSON* param) {
+//ë§¤ê°œë³€ìˆ˜ ì¶”ì 
+void analyzeJsonObj_Function_Param(cJSON* param,int k) {
 	cJSON* type = cJSON_GetObjectItemCaseSensitive(param, "type");
 
 	cJSON* type2 = cJSON_GetObjectItemCaseSensitive(type, "type");
@@ -119,49 +145,53 @@ void analyzeJsonObj_Function_Param(cJSON* param) {
 	if (type3 != NULL) {
 		identifier = cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(type3, "names"), 0);
 		name = cJSON_GetObjectItemCaseSensitive(type2, "declname");
+		strcpy(functions[iFunctionCount].params[k].type, identifier->valuestring);
+		strcpy(functions[iFunctionCount].params[k].name, name->valuestring);
 	}
 	else {
 		identifier = cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(type2, "names"), 0);
+		strcpy(functions[iFunctionCount].params[k].type, identifier->valuestring);
 	}
-
+	functions[iFunctionCount].paramCount++;
 	printf("param: %s %s\n", identifier->valuestring, name->valuestring);
 
 }
 
-//Àç±ÍÀû if Å½»ö ¹× °³¼ö ¹ÝÈ¯
+//ìž¬ê·€ì  if íƒìƒ‰ ë° ê°œìˆ˜ ë°˜í™˜
 int countIfNodetypes(cJSON* item) {
-	int count = 0; // ÇöÀç ³ëµå¿¡ ´ëÇÑ Ä«¿îÆ®
+	int count = 0; // í˜„ìž¬ ë…¸ë“œì— ëŒ€í•œ ì¹´ìš´íŠ¸
 
 	if (item == NULL) {
-		return 0; // NULL ³ëµåÀÏ °æ¿ì, Ä«¿îÆ®ÇÏÁö ¾ÊÀ½
+		return 0; // NULL ë…¸ë“œì¼ ê²½ìš°, ì¹´ìš´íŠ¸í•˜ì§€ ì•ŠìŒ
 	}
 
-	// ÇöÀç ³ëµå°¡ '_nodetype'ÀÌ "If"ÀÎÁö È®ÀÎ
+	// í˜„ìž¬ ë…¸ë“œê°€ '_nodetype'ì´ "If"ì¸ì§€ í™•ì¸
 	cJSON* nodeType = cJSON_GetObjectItemCaseSensitive(item, "_nodetype");
 	if (nodeType && cJSON_IsString(nodeType) && strcmp(nodeType->valuestring, "If") == 0) {
-		count = 1; // ÇöÀç ³ëµå°¡ Á¶°ÇÀ» ¸¸Á·ÇÏ¸é Ä«¿îÆ® Áõ°¡
+		count = 1; // í˜„ìž¬ ë…¸ë“œê°€ ì¡°ê±´ì„ ë§Œì¡±í•˜ë©´ ì¹´ìš´íŠ¸ ì¦ê°€
 	}
 
-	// ÇöÀç ³ëµå°¡ °´Ã¼ÀÌ°Å³ª ¹è¿­ÀÎ °æ¿ì, ±× ³»ºÎ¸¦ Àç±ÍÀûÀ¸·Î Å½»ö
+	// í˜„ìž¬ ë…¸ë“œê°€ ê°ì²´ì´ê±°ë‚˜ ë°°ì—´ì¸ ê²½ìš°, ê·¸ ë‚´ë¶€ë¥¼ ìž¬ê·€ì ìœ¼ë¡œ íƒìƒ‰
 	cJSON* child = NULL;
 	cJSON_ArrayForEach(child, item) {
-		count += countIfNodetypes(child); // ÀÚ½Ä ³ëµå Å½»ö °á°ú¸¦ Ä«¿îÆ®¿¡ Ãß°¡
+		count += countIfNodetypes(child); // ìžì‹ ë…¸ë“œ íƒìƒ‰ ê²°ê³¼ë¥¼ ì¹´ìš´íŠ¸ì— ì¶”ê°€
 	}
 
-	return count; // ÃÖÁ¾ Ä«¿îÆ® °ª ¹ÝÈ¯
+	return count; // ìµœì¢… ì¹´ìš´íŠ¸ ê°’ ë°˜í™˜
 }
 
-//º¯¼ö ¼±¾ð ¹× ÇÔ¼ö ¼±¾ð
+//ë³€ìˆ˜ ì„ ì–¸ ë° í•¨ìˆ˜ ì„ ì–¸
 void analyzeJsonObj_Decl(cJSON* nodeTypeDecl) {
+	functions[iFunctionCount].paramCount = 0;
 	cJSON* name = cJSON_GetObjectItemCaseSensitive(nodeTypeDecl, "name");
 	
 	cJSON* type = cJSON_GetObjectItemCaseSensitive(nodeTypeDecl, "type");
 	cJSON* type2 = cJSON_GetObjectItemCaseSensitive(type, "type");
 	cJSON* nodetype= cJSON_GetObjectItemCaseSensitive(type, "_nodetype");
 	
-	//body ¾ø´Â ÇÔ¼ö ¼±¾ð
+	//body ì—†ëŠ” í•¨ìˆ˜ ì„ ì–¸
 	if (strcmp(nodetype->valuestring, "FuncDecl") == 0) {
-		printf("(ÇÔ¼ö ¹Ì±¸Çö) %s\n", name->valuestring);
+		printf("(í•¨ìˆ˜ ë¯¸êµ¬í˜„) %s\n", name->valuestring);
 		cJSON* type3 = cJSON_GetObjectItemCaseSensitive(type2, "type");
 
 		
@@ -169,9 +199,11 @@ void analyzeJsonObj_Decl(cJSON* nodeTypeDecl) {
 
 		if (identifier == NULL) {
 			printf("return type: void\n");
+			strcpy(functions[iFunctionCount].returnType, "void");
 		}
 		else {
 			printf("return type: %s\n", identifier->valuestring);
+			strcpy(functions[iFunctionCount].returnType, identifier->valuestring);
 		}
 
 		cJSON* args = cJSON_GetObjectItemCaseSensitive(type, "args");
@@ -180,15 +212,46 @@ void analyzeJsonObj_Decl(cJSON* nodeTypeDecl) {
 		if (params != NULL) {
 			int i = cJSON_GetArraySize(params);
 			for (int k = 0; k < i; k++) {
-				analyzeJsonObj_Function_Param(cJSON_GetArrayItem(params, k));
+				analyzeJsonObj_Function_Param(cJSON_GetArrayItem(params, k),k);
 			}
 		}
 		else {
 			printf("param: none\n");
 		}
-
+		iFunctionCount++;
 	}
 	
+}
+
+//ìƒˆë¡œìš´ json ìž‘ì„± í•¨ìˆ˜
+void writeFunctionsToJson(const char* filename) {
+	cJSON* root = cJSON_CreateArray();
+	for (int i = 0; i < iFunctionCount; i++) {
+		cJSON* functionJson = cJSON_CreateObject();
+		cJSON_AddStringToObject(functionJson, "name", functions[i].name);
+		cJSON_AddStringToObject(functionJson, "returnType", functions[i].returnType);
+
+		cJSON* paramsArray = cJSON_CreateArray();
+		for (int j = 0; j < functions[i].paramCount; j++) {
+			cJSON* param = cJSON_CreateObject();
+			cJSON_AddStringToObject(param, "type", functions[i].params[j].type);
+			cJSON_AddStringToObject(param, "name", functions[i].params[j].name);
+			cJSON_AddItemToArray(paramsArray, param);
+		}
+		cJSON_AddItemToObject(functionJson, "params", paramsArray);
+		cJSON_AddNumberToObject(functionJson, "ifCount", functions[i].ifCount);
+
+		cJSON_AddItemToArray(root, functionJson);
+	}
+
+	char* jsonString = cJSON_Print(root);
+	FILE* file = fopen(filename, "w");
+	if (file != NULL) {
+		fprintf(file, "%s", jsonString);
+		fclose(file);
+	}
+	free(jsonString);
+	cJSON_Delete(root);
 }
 
 
@@ -202,7 +265,7 @@ int main() {
 		return 1;
 	}
 
-	// ÆÄÀÏ Å©±â ±¸ÇÏ±â
+	// íŒŒì¼ í¬ê¸° êµ¬í•˜ê¸°
 	fseek(file, 0, SEEK_END);
 	long length = ftell(file);
 	fseek(file, 0, SEEK_SET);
@@ -210,32 +273,34 @@ int main() {
 	char* sTemp = NULL;
 	char line[1024];
 
-	char* jsonString = malloc(length + 1); // +1 null ¹®ÀÚ Ãß°¡ À§ÇØ +1
+	char* jsonString = malloc(length + 1); // +1 null ë¬¸ìž ì¶”ê°€ ìœ„í•´ +1
 	if (jsonString == NULL) {
 		perror("Memory allocation failed");
 		fclose(file);
 		return 1;
 	}
-	jsonString[0] = '\0'; // ³Î ¹®ÀÚ·Î ÃÊ±âÈ­
+	jsonString[0] = '\0'; // ë„ ë¬¸ìžë¡œ ì´ˆê¸°í™”
 
 
 
-	// ÆÄÀÏ ÀÐ±â
+	// íŒŒì¼ ì½ê¸°
 	while (fgets(line, sizeof(line), file) != NULL) {
 		
 		strncat(jsonString, line, length - strlen(jsonString));
 	}
 
 
-	// JSON ¹®ÀÚ¿­ ÆÄ½Ì
+	// JSON ë¬¸ìžì—´ íŒŒì‹±
 	cJSON* json = parseJsonString(jsonString);
 	iterJsonObj(json);
 
-	// Á¤¸®
+	// ì •ë¦¬
 	fclose(file);
 	free(jsonString);
-	printf("±¸ÇöµÈ ÇÔ¼ö ÃÑ %d°³\n", iFunctionNum);
+	printf("í•¨ìˆ˜ ì´ %dê°œ\n", iFunctionCount);
 
+	writeFunctionsToJson("functions_info.json");
 
 	return 0;
 }
+
